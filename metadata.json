@@ -1,0 +1,6 @@
+{
+  "name": "LeetCode Daily Companion",
+  "description": "An offline personal tracker for competitive programmers to log daily LeetCode practice, track solving time, maintain streaks, and get AI approach hints.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
