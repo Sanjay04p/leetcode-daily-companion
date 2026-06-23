@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -33,7 +34,7 @@ class MainActivity : ComponentActivity() {
 
         // 1. Initialize local Room database
         val database = AppDatabase.getDatabase(applicationContext)
-        val repository = ProblemRepository(database.problemDao())
+        val repository = ProblemRepository(database.problemDao(), database.prepDao())
 
         // 2. Initialize ViewModel via factory
         val viewModel = ViewModelProvider(
@@ -47,8 +48,8 @@ class MainActivity : ComponentActivity() {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route ?: "home"
 
-                // Hide bottom bar on AI hint screen for an expansive coach workspace.
-                val showBottomBar = currentRoute != "ai_hint"
+                // Hide bottom bar on AI hint screen or during mock active to maximize real-time focus.
+                val showBottomBar = currentRoute != "ai_hint" && !viewModel.isMockActive
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -62,7 +63,8 @@ class MainActivity : ComponentActivity() {
                                     NavTab("Home", "home", Icons.Default.Home),
                                     NavTab("Log", "log", Icons.Default.AddCircleOutline),
                                     NavTab("History", "history", Icons.Default.Assignment),
-                                    NavTab("Stats", "stats", Icons.Default.BarChart)
+                                    NavTab("Stats", "stats", Icons.Default.BarChart),
+                                    NavTab("Prep", "prep", Icons.Default.Work)
                                 )
 
                                 navTabs.forEach { tab ->
@@ -135,6 +137,12 @@ class MainActivity : ComponentActivity() {
 
                         composable("stats") {
                             StatsScreen(
+                                viewModel = viewModel
+                            )
+                        }
+
+                        composable("prep") {
+                            PrepScreen(
                                 viewModel = viewModel
                             )
                         }
