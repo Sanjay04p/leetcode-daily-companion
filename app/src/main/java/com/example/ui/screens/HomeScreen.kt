@@ -91,8 +91,11 @@ fun HomeScreen(
         todayProblems.count { it.difficulty == "HARD" }
     }
 
-    Scaffold(
-        topBar = {
+    if (viewModel.isMockActive) {
+        MockInterviewActiveView(viewModel = viewModel)
+    } else {
+        Scaffold(
+            topBar = {
             TopAppBar(
                 title = {
                     Column {
@@ -307,9 +310,157 @@ fun HomeScreen(
                 }
             }
 
+            // Interview Prep Card
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Interview Prep",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+
+                val resumeProfile by viewModel.resumeProfile.collectAsState()
+                val allQuestions by viewModel.allQuestions.collectAsState()
+
+                if (resumeProfile == null) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = CardBackground),
+                        border = BorderStroke(1.dp, BorderColor)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Accelerate Career Interview Readiness",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "Build tailored questions from your projects, history, and technologies. Add your resume profile in the Prep workspace to start.",
+                                fontSize = 12.sp,
+                                color = TextSecondary,
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+                } else {
+                    val totalQ = allQuestions.size
+                    val practicedQ = allQuestions.count { it.isPracticed }
+                    val unpracticedQ = totalQ - practicedQ
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = CardBackground),
+                        border = BorderStroke(1.dp, BorderColor)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Resume Prep Goals",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Tailored to your current professional portfolio.",
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .background(PrimaryPurple.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "$practicedQ / $totalQ Practiced",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = PrimaryPurple
+                                    )
+                                }
+                            }
+
+                            // Simple micro progress bar
+                            LinearProgressIndicator(
+                                progress = { if (totalQ > 0) practicedQ.toFloat() / totalQ else 0.0f },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
+                                color = PrimaryPurple,
+                                trackColor = BorderColor
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "$unpracticedQ questions",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AccentAmber
+                                    )
+                                    Text(
+                                        text = "remaining to master",
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+
+                                Button(
+                                    onClick = { viewModel.start5MinMock() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Start 5-min mock interview",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "5-Min Mock",
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 12.sp,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(60.dp))
         }
     }
+}
 }
 
 @Composable
