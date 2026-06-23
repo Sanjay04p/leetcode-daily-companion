@@ -29,6 +29,8 @@ fun StatsScreen(
     val problems by viewModel.problems.collectAsState()
     val currentStreak by viewModel.currentStreak.collectAsState()
     val longestStreak by viewModel.longestStreak.collectAsState()
+    val resumeProfile by viewModel.resumeProfile.collectAsState()
+    val allQuestions by viewModel.allQuestions.collectAsState()
 
     // 1. Total split
     val totalCount = problems.size
@@ -352,6 +354,140 @@ fun StatsScreen(
                 }
             }
 
+            // Interview Prep Diagnostics Card
+            val totalPrep = allQuestions.size
+            val practicedPrep = allQuestions.count { it.isPracticed }
+            val unpracticedPrep = totalPrep - practicedPrep
+
+            val avgProject = remember(allQuestions) {
+                val list = allQuestions.filter { it.category == "PROJECT" && it.isPracticed && it.selfRating > 0 }
+                if (list.isEmpty()) 0f else list.map { it.selfRating }.average().toFloat()
+            }
+            val avgTechnical = remember(allQuestions) {
+                val list = allQuestions.filter { it.category == "TECHNICAL" && it.isPracticed && it.selfRating > 0 }
+                if (list.isEmpty()) 0f else list.map { it.selfRating }.average().toFloat()
+            }
+            val avgBehavioral = remember(allQuestions) {
+                val list = allQuestions.filter { it.category == "BEHAVIORAL" && it.isPracticed && it.selfRating > 0 }
+                if (list.isEmpty()) 0f else list.map { it.selfRating }.average().toFloat()
+            }
+            val avgHR = remember(allQuestions) {
+                val list = allQuestions.filter { it.category == "HR" && it.isPracticed && it.selfRating > 0 }
+                if (list.isEmpty()) 0f else list.map { it.selfRating }.average().toFloat()
+            }
+
+            val categoryRatings = remember(avgProject, avgTechnical, avgBehavioral, avgHR) {
+                listOf(
+                    "Project" to avgProject,
+                    "Technical" to avgTechnical,
+                    "Behavioral" to avgBehavioral,
+                    "HR" to avgHR
+                ).filter { it.second > 0f }
+            }
+
+            val weakestCategory = remember(categoryRatings) {
+                if (categoryRatings.isEmpty()) "N/A" else categoryRatings.minByOrNull { it.second }?.first ?: "N/A"
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBackground),
+                border = BorderStroke(1.dp, BorderColor)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "Resume Prep Diagnostics",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+
+                    if (resumeProfile == null) {
+                        Text(
+                            text = "Add your resume in the Prep tab to generate questions and track review statistics.",
+                            fontSize = 13.sp,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    } else {
+                        // Progress alignment summary
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "$practicedPrep/$totalPrep",
+                                fontSize = 44.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = PrimaryPurple,
+                                modifier = Modifier.padding(end = 24.dp)
+                            )
+
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                StatusProgressRow("Ready (Practiced)", practicedPrep, AccentGreen)
+                                StatusProgressRow("Active Backlog", unpracticedPrep, AccentAmber)
+                            }
+                        }
+
+                        HorizontalDivider(color = BorderColor)
+
+                        // Ratings breakdown per category
+                        Text(
+                            text = "Average Category Competency",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            CategoryProgressRow("Project Questions", avgProject, Color(0xFF2196F3))
+                            CategoryProgressRow("Technical Questions", avgTechnical, AccentAmber)
+                            CategoryProgressRow("Behavioral Questions", avgBehavioral, AccentGreen)
+                            CategoryProgressRow("HR Questions", avgHR, NeutralGray)
+                        }
+
+                        // Weakest focus callout warning
+                        if (weakestCategory != "N/A") {
+                            HorizontalDivider(color = BorderColor)
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = AccentRed.copy(alpha = 0.08f)),
+                                border = BorderStroke(1.dp, AccentRed.copy(alpha = 0.15f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("⚠️", fontSize = 16.sp)
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "Weakest Focus Category",
+                                            fontSize = 11.sp,
+                                            color = AccentRed,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "$weakestCategory questions are currently your lowest rating category in mock practice metrics.",
+                                            fontSize = 12.sp,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(60.dp))
         }
     }
@@ -440,4 +576,37 @@ fun formatAvgTime(seconds: Int): String {
     val m = seconds / 60
     val s = seconds % 60
     return if (m > 0) "${m}m ${s}s" else "${s}s"
+}
+
+@Composable
+fun CategoryProgressRow(label: String, avgRating: Float, color: Color) {
+    val percent = (avgRating / 5.0f).coerceIn(0f, 1f)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, fontSize = 12.sp, color = TextSecondary)
+            Text(
+                text = if (avgRating > 0f) String.format(Locale.getDefault(), "%.1f ★", avgRating) else "Unpracticed",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .background(Color(0xFF2C2C2E), RoundedCornerShape(4.dp))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(if (percent > 0) percent else 0.01f)
+                    .background(color, RoundedCornerShape(4.dp))
+            )
+        }
+    }
 }
