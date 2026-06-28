@@ -19,6 +19,9 @@ import okhttp3.RequestBody
 import org.json.JSONObject
 import java.util.Calendar
 
+// Fallback constant for GROQ_API_KEY. Users can fill it in here, or configure GROQ_API_KEY in the Secrets panel in AI Studio.
+private const val GROQ_API_KEY = "your_groq_api_key_here"
+
 data class AIHintResult(
     val pattern: String = "",
     val keyInsight: String = "",
@@ -259,98 +262,137 @@ class LeetCodeViewModel(private val repository: ProblemRepository) : ViewModel()
     var aiLanguage by mutableStateOf("Python")
     var aiState by mutableStateOf<AIHintState>(AIHintState.Idle)
         private set
+    var aiLoadingText by mutableStateOf("")
 
     fun getAIHint() {
         val statement = aiProblemStatement.trim()
         if (statement.isEmpty()) return
+        
         aiState = AIHintState.Loading
+        aiLoadingText = "Analyzing your problem statement..."
+        
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // BuildConfig mapping for GEMINI_API_KEY
-                val apiKey = com.example.BuildConfig.GEMINI_API_KEY
-                if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-                    viewModelScope.launch(Dispatchers.Main) {
-                        aiState = AIHintState.Error("Gemini API key is not configured. Please add GEMINI_API_KEY in the Secrets panel in AI Studio.")
-                    }
-                    return@launch
-                }
+            val apiKey = if (com.example.BuildConfig.GROQ_API_KEY.isNotEmpty() && com.example.BuildConfig.GROQ_API_KEY != "MY_GROQ_API_KEY") {
+                com.example.BuildConfig.GROQ_API_KEY
+            } else {
+                GROQ_API_KEY
+            }
 
-                val systemInstruction = """
-                    You are a competitive programming coach. Given a LeetCode problem statement, respond ONLY with:
-                    1. Pattern: [pattern name]
-                    2. Key insight: [1-2 sentences]
-                    3. Algorithm: [approach in plain English, no code]
-                    4. Complexity: Time O(...) | Space O(...)
-                    5. Watch out for: [1 edge case]
-                    Do NOT write any code. Keep total response under 150 words.
-                """.trimIndent()
-
-                val promptText = "Preferred coding language: $aiLanguage\n\nProblem Statement:\n$statement"
-
-                // Construct REST Call
-                val contentsArray = org.json.JSONArray().put(
-                    JSONObject().put("parts", org.json.JSONArray().put(
-                        JSONObject().put("text", promptText)
-                    ))
-                )
-
-                val systemInstructionObj = JSONObject().put("parts", org.json.JSONArray().put(
-                    JSONObject().put("text", systemInstruction)
-                ))
-
-                val requestBodyJson = JSONObject().apply {
-                    put("contents", contentsArray)
-                    put("systemInstruction", systemInstructionObj)
-                }
-
-                val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
-                val body = RequestBody.create(mediaType, requestBodyJson.toString())
-                val request = Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-                    .post(body)
-                    .build()
-
-                val client = OkHttpClient.Builder()
-                    .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .build()
-
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        val responseBody = response.body?.string() ?: ""
-                        viewModelScope.launch(Dispatchers.Main) {
-                            aiState = AIHintState.Error("API call failed (code ${response.code}): $responseBody")
-                        }
-                        return@launch
-                    }
-                    val responseString = response.body?.string() ?: ""
-                    val jsonResponse = JSONObject(responseString)
-                    val candidates = jsonResponse.getJSONArray("candidates")
-                    if (candidates.length() > 0) {
-                        val candidate = candidates.getJSONObject(0)
-                        val content = candidate.getJSONObject("content")
-                        val parts = content.getJSONArray("parts")
-                        if (parts.length() > 0) {
-                            val text = parts.getJSONObject(0).getString("text")
-                            val parsedResult = parseAIHint(text)
-                            viewModelScope.launch(Dispatchers.Main) {
-                                aiState = AIHintState.Success(text, parsedResult)
-                            }
-                        } else {
-                            viewModelScope.launch(Dispatchers.Main) {
-                                aiState = AIHintState.Error("Error: Empty parts list in content.")
-                            }
-                        }
-                    } else {
-                        viewModelScope.launch(Dispatchers.Main) {
-                            aiState = AIHintState.Error("Error: No candidates found in the response.")
-                        }
-                    }
-                }
-            } catch (e: Exception) {
+            if (apiKey.isEmpty() || apiKey == "your_groq_api_key_here") {
                 viewModelScope.launch(Dispatchers.Main) {
-                    aiState = AIHintState.Error("Network/Execution error: ${e.message ?: "Unknown error"}")
+                    aiState = AIHintState.Error("Groq API key is not configured. Please add GROQ_API_KEY in the Secrets panel in AI Studio or edit the constant in LeetCodeViewModel.kt.")
+                }
+                return@launch
+            }
+
+            val systemInstruction = """
+                You are a CP coach. For this problem, reply in exactly this format:
+                Pattern: [name]
+                Insight: [one sentence]
+                Approach: [2-3 sentences, no code]
+                Complexity: O(...) time | O(...) space
+            """.trimIndent()
+
+            val promptText = "Preferred coding language: $aiLanguage\n\nProblem Statement:\n$statement"
+
+            var success = false
+            var attempt = 1
+            val maxAttempts = 3
+            var lastErrorMsg = ""
+
+            while (attempt <= maxAttempts && !success) {
+                if (attempt > 1) {
+                    viewModelScope.launch(Dispatchers.Main) {
+                        aiLoadingText = "Retrying... (attempt $attempt/$maxAttempts)"
+                    }
+                    delay(3000)
+                }
+
+                try {
+                    val messagesArray = org.json.JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "system")
+                            put("content", systemInstruction)
+                        })
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", promptText)
+                        })
+                    }
+
+                    val requestBodyJson = JSONObject().apply {
+                        put("model", "llama-3.3-70b-versatile")
+                        put("messages", messagesArray)
+                        put("max_tokens", 2000)
+                        put("temperature", 0.7)
+                        put("stream", true)
+                    }
+
+                    val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
+                    val body = RequestBody.create(mediaType, requestBodyJson.toString())
+                    val request = Request.Builder()
+                        .url("https://api.groq.com/openai/v1/chat/completions")
+                        .addHeader("Authorization", "Bearer $apiKey")
+                        .post(body)
+                        .build()
+
+                    val client = OkHttpClient.Builder()
+                        .connectTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                        .writeTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+
+                    client.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) {
+                            val responseBody = response.body?.string() ?: ""
+                            lastErrorMsg = "API call failed (code ${response.code}): $responseBody"
+                            attempt++
+                            return@use
+                        }
+
+                        val runningResponse = StringBuilder()
+                        response.body?.source()?.let { source ->
+                            while (!source.exhausted()) {
+                                val line = source.readUtf8Line() ?: break
+                                if (line.startsWith("data: ")) {
+                                    val chunk = line.substring(6).trim()
+                                    if (chunk == "[DONE]") {
+                                        break
+                                    }
+                                    if (chunk.isNotEmpty()) {
+                                        try {
+                                            val jsonObj = JSONObject(chunk)
+                                            val choices = jsonObj.getJSONArray("choices")
+                                            if (choices.length() > 0) {
+                                                val delta = choices.getJSONObject(0).getJSONObject("delta")
+                                                val content = delta.optString("content", "")
+                                                if (content.isNotEmpty()) {
+                                                    runningResponse.append(content)
+                                                    val partialText = runningResponse.toString()
+                                                    val partialParsed = parseAIHint(partialText)
+                                                    viewModelScope.launch(Dispatchers.Main) {
+                                                        aiState = AIHintState.Success(partialText, partialParsed)
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            // Handle JSON parsing for streaming chunk
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        success = true
+                    }
+                } catch (e: Exception) {
+                    lastErrorMsg = "Network/Execution error: ${e.message ?: "Unknown error"}"
+                    attempt++
+                }
+            }
+
+            if (!success) {
+                viewModelScope.launch(Dispatchers.Main) {
+                    aiState = AIHintState.Error(lastErrorMsg.ifEmpty { "Failed to get AI hint after $maxAttempts attempts." })
                 }
             }
         }
@@ -377,7 +419,7 @@ class LeetCodeViewModel(private val repository: ProblemRepository) : ViewModel()
                     currentSection = 2
                     keyInsight = line.substringAfter(":").trim()
                 }
-                lower.startsWith("3.") || lower.contains("algorithm:") -> {
+                lower.startsWith("3.") || lower.contains("algorithm:") || lower.contains("approach:") -> {
                     currentSection = 3
                     algorithm = line.substringAfter(":").trim()
                 }
@@ -406,8 +448,8 @@ class LeetCodeViewModel(private val repository: ProblemRepository) : ViewModel()
 
         // Clean up parsed output if parts of the list identifier got mixed in
         pattern = pattern.removePrefix("1.").removePrefix("Pattern:").trim()
-        keyInsight = keyInsight.removePrefix("2.").removePrefix("Key insight:").removePrefix("Key Insight:").trim()
-        algorithm = algorithm.removePrefix("3.").removePrefix("Algorithm:").trim()
+        keyInsight = keyInsight.removePrefix("2.").removePrefix("Key insight:").removePrefix("Key Insight:").removePrefix("Insight:").trim()
+        algorithm = algorithm.removePrefix("3.").removePrefix("Algorithm:").removePrefix("Approach:").trim()
         val complexity = complexityStr.toString().removePrefix("4.").removePrefix("Complexity:").trim()
         watchOut = watchOut.removePrefix("5.").removePrefix("Watch out for:").removePrefix("Watch out:").trim()
 
@@ -452,6 +494,18 @@ class LeetCodeViewModel(private val repository: ProblemRepository) : ViewModel()
     var generateError by mutableStateOf<String?>(null)
     var isRegeneratingAnswer by mutableStateOf(false)
         private set
+
+    enum class PrepGenerationStep {
+        IDLE,
+        STEP1_RUNNING, // "Generating project & technical questions... (1/2)"
+        STEP1_FAILED,
+        STEP2_RUNNING, // "Generating behavioral & HR questions... (2/2)"
+        STEP2_FAILED,
+        SUCCESS
+    }
+
+    var prepGenerationStep by mutableStateOf(PrepGenerationStep.IDLE)
+    var tempStep1Questions: List<InterviewQuestion>? = null
 
     // Sub-Screen 2: Questions Filtering Status
     var prepCategoryFilter by mutableStateOf("All")
@@ -511,161 +565,345 @@ class LeetCodeViewModel(private val repository: ProblemRepository) : ViewModel()
         val resumeText = resumeInputText.trim()
         if (resumeText.isEmpty()) {
             generateError = "Please paste your resume first."
+            prepGenerationStep = PrepGenerationStep.IDLE
             return
         }
         isGeneratingQuestions = true
         generateError = null
+        tempStep1Questions = null // Reset cache
+        prepGenerationStep = PrepGenerationStep.STEP1_RUNNING
+        runGenerationWorkflow(resumeText, onSuccess)
+    }
+
+    fun retryFailedGenerationStep(onSuccess: () -> Unit) {
+        val resumeText = resumeInputText.trim()
+        if (resumeText.isEmpty()) {
+            generateError = "Please paste your resume first."
+            prepGenerationStep = PrepGenerationStep.IDLE
+            return
+        }
+        generateError = null
+        isGeneratingQuestions = true
+
+        if (prepGenerationStep == PrepGenerationStep.STEP1_FAILED) {
+            prepGenerationStep = PrepGenerationStep.STEP1_RUNNING
+            runGenerationWorkflow(resumeText, onSuccess)
+        } else if (prepGenerationStep == PrepGenerationStep.STEP2_FAILED) {
+            prepGenerationStep = PrepGenerationStep.STEP2_RUNNING
+            runGenerationStep2(resumeText, tempStep1Questions ?: emptyList(), onSuccess)
+        }
+    }
+
+    private fun runGenerationWorkflow(resumeText: String, onSuccess: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val apiKey = com.example.BuildConfig.GEMINI_API_KEY
-                if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+                val apiKey = if (com.example.BuildConfig.GROQ_API_KEY.isNotEmpty() && com.example.BuildConfig.GROQ_API_KEY != "MY_GROQ_API_KEY") {
+                    com.example.BuildConfig.GROQ_API_KEY
+                } else {
+                    GROQ_API_KEY
+                }
+                if (apiKey.isEmpty() || apiKey == "your_groq_api_key_here") {
                     viewModelScope.launch(Dispatchers.Main) {
-                        generateError = "Gemini API key is not configured. Please add GEMINI_API_KEY in the Secrets panel in AI Studio."
+                        generateError = "Groq API key is not configured. Please add GROQ_API_KEY in the Secrets panel in AI Studio or edit the constant in LeetCodeViewModel.kt."
                         isGeneratingQuestions = false
+                        prepGenerationStep = PrepGenerationStep.STEP1_FAILED
                     }
                     return@launch
                 }
 
                 val systemInstruction = """
                     You are a senior technical interviewer at a top tech company.
-                    Analyze the resume below and generate exactly 25 interview questions the candidate should prepare for.
+                    Analyze the resume below and generate exactly 10 interview questions the candidate should prepare for.
                     Return ONLY a valid JSON array, no markdown, no explanation. Each object:
                     {
                       "question": "string",
-                      "suggestedAnswer": "string (3-5 sentences, STAR format for behavioral, technical explanation for others)",
-                      "category": "PROJECT" | "TECHNICAL" | "BEHAVIORAL" | "HR",
+                      "suggestedAnswer": "string (3-5 sentences, technical explanation)",
+                      "category": "PROJECT" | "TECHNICAL",
                       "sourceProject": "string or null",
                       "difficulty": "EASY" | "MEDIUM" | "HARD"
                     }
                     Make questions specific to their actual projects, tech stack, and experience — not generic.
-                    Include 8 PROJECT questions, 8 TECHNICAL questions, 6 BEHAVIORAL questions, 3 HR questions.
+                    Include exactly 5 PROJECT questions and 5 TECHNICAL questions.
                 """.trimIndent()
 
                 val promptText = "Resume:\n$resumeText"
 
-                val contentsArray = org.json.JSONArray().put(
-                    JSONObject().put("parts", org.json.JSONArray().put(
-                        JSONObject().put("text", promptText)
-                    ))
-                )
-
-                val systemInstructionObj = JSONObject().put("parts", org.json.JSONArray().put(
-                    JSONObject().put("text", systemInstruction)
-                ))
+                val messagesArray = org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "system")
+                        put("content", systemInstruction)
+                    })
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", promptText)
+                    })
+                }
 
                 val requestBodyJson = JSONObject().apply {
-                    put("contents", contentsArray)
-                    put("systemInstruction", systemInstructionObj)
+                    put("model", "llama-3.3-70b-versatile")
+                    put("messages", messagesArray)
+                    put("max_tokens", 3000)
+                    put("temperature", 0.7)
                 }
 
                 val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
                 val body = RequestBody.create(mediaType, requestBodyJson.toString())
                 val request = Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+                    .url("https://api.groq.com/openai/v1/chat/completions")
+                    .addHeader("Authorization", "Bearer $apiKey")
                     .post(body)
                     .build()
 
                 val client = OkHttpClient.Builder()
-                    .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                    .connectTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .writeTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
 
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         val responseBody = response.body?.string() ?: ""
                         viewModelScope.launch(Dispatchers.Main) {
-                            generateError = "API Server returned code ${response.code}: $responseBody"
+                            generateError = "Step 1 (Project & Technical) failed: Code ${response.code}: $responseBody"
                             isGeneratingQuestions = false
+                            prepGenerationStep = PrepGenerationStep.STEP1_FAILED
                         }
                         return@launch
                     }
                     val responseString = response.body?.string() ?: ""
                     val jsonResponse = JSONObject(responseString)
-                    val candidates = jsonResponse.getJSONArray("candidates")
-                    if (candidates.length() > 0) {
-                        val candidate = candidates.getJSONObject(0)
-                        val content = candidate.getJSONObject("content")
-                        val parts = content.getJSONArray("parts")
-                        if (parts.length() > 0) {
-                            val rawText = parts.getJSONObject(0).getString("text")
-                            val cleanJsonStr = cleanJson(rawText)
-                            val qList = mutableListOf<InterviewQuestion>()
+                    val choices = jsonResponse.getJSONArray("choices")
+                    if (choices.length() > 0) {
+                        val choice = choices.getJSONObject(0)
+                        val message = choice.getJSONObject("message")
+                        val rawText = message.getString("content")
+                        val cleanJsonStr = cleanJson(rawText)
+                        val qList = mutableListOf<InterviewQuestion>()
 
-                            try {
-                                val jsonArray = org.json.JSONArray(cleanJsonStr)
-                                for (i in 0 until jsonArray.length()) {
-                                    val obj = jsonArray.getJSONObject(i)
-                                    val question = obj.optString("question", "")
-                                    val suggestedAnswer = obj.optString("suggestedAnswer", "")
-                                    val category = obj.optString("category", "TECHNICAL").uppercase()
-                                    val sourceProject = if (obj.isNull("sourceProject")) null else obj.optString("sourceProject", null)
-                                    val difficulty = obj.optString("difficulty", "MEDIUM").uppercase()
+                        try {
+                            val jsonArray = org.json.JSONArray(cleanJsonStr)
+                            for (i in 0 until jsonArray.length()) {
+                                val obj = jsonArray.getJSONObject(i)
+                                val question = obj.optString("question", "")
+                                val suggestedAnswer = obj.optString("suggestedAnswer", "")
+                                val category = obj.optString("category", "TECHNICAL").uppercase()
+                                val sourceProject = if (obj.isNull("sourceProject")) null else obj.optString("sourceProject", null)
+                                val difficulty = obj.optString("difficulty", "MEDIUM").uppercase()
 
-                                    if (question.isNotEmpty()) {
-                                        qList.add(
-                                            InterviewQuestion(
-                                                question = question,
-                                                suggestedAnswer = suggestedAnswer,
-                                                category = category,
-                                                sourceProject = sourceProject,
-                                                difficulty = difficulty,
-                                                dateGenerated = System.currentTimeMillis()
-                                            )
+                                if (question.isNotEmpty()) {
+                                    qList.add(
+                                        InterviewQuestion(
+                                            question = question,
+                                            suggestedAnswer = suggestedAnswer,
+                                            category = category,
+                                            sourceProject = sourceProject,
+                                            difficulty = difficulty,
+                                            dateGenerated = System.currentTimeMillis()
                                         )
-                                    }
+                                    )
                                 }
-                            } catch (e: Exception) {
-                                viewModelScope.launch(Dispatchers.Main) {
-                                    generateError = "JSON Parsing failed: ${e.message}\nRaw text structure was unexpected."
-                                    isGeneratingQuestions = false
-                                }
-                                return@launch
                             }
-
-                            if (qList.isEmpty()) {
-                                viewModelScope.launch(Dispatchers.Main) {
-                                    generateError = "No valid questions could be extracted from JSON."
-                                    isGeneratingQuestions = false
-                                }
-                                return@launch
-                            }
-
-                            // Save to database
-                            val profile = ResumeProfile(
-                                resumeText = resumeText,
-                                lastUpdated = System.currentTimeMillis()
-                            )
-                            repository.insertResumeProfile(profile)
-                            repository.clearAllQuestions()
-                            repository.insertQuestions(qList)
-
+                        } catch (e: Exception) {
                             viewModelScope.launch(Dispatchers.Main) {
+                                generateError = "Step 1 parsing failed: ${e.message}\nRaw text structures were unexpected."
                                 isGeneratingQuestions = false
-                                if (qList.size < 25) {
-                                    _snackbarMessage.emit("Generated ${qList.size} questions!")
-                                } else {
-                                    _snackbarMessage.emit("25 questions generated!")
-                                }
-                                onSuccess()
+                                prepGenerationStep = PrepGenerationStep.STEP1_FAILED
                             }
-                        } else {
-                            viewModelScope.launch(Dispatchers.Main) {
-                                generateError = "No text response parsed from generation candidates."
-                                isGeneratingQuestions = false
-                            }
+                            return@launch
                         }
+
+                        if (qList.isEmpty()) {
+                            viewModelScope.launch(Dispatchers.Main) {
+                                generateError = "Step 1 failed: No valid questions could be extracted."
+                                isGeneratingQuestions = false
+                                prepGenerationStep = PrepGenerationStep.STEP1_FAILED
+                            }
+                            return@launch
+                        }
+
+                        // Step 1 Succeeded! Keep questions and trigger step 2
+                        tempStep1Questions = qList
+                        viewModelScope.launch(Dispatchers.Main) {
+                            prepGenerationStep = PrepGenerationStep.STEP2_RUNNING
+                        }
+                        runGenerationStep2(resumeText, qList, onSuccess)
+
                     } else {
                         viewModelScope.launch(Dispatchers.Main) {
-                            generateError = "No generation candidates returned."
+                            generateError = "Step 1 failed: No content returned."
                             isGeneratingQuestions = false
+                            prepGenerationStep = PrepGenerationStep.STEP1_FAILED
                         }
                     }
                 }
             } catch (e: Exception) {
                 viewModelScope.launch(Dispatchers.Main) {
-                    generateError = "Error: ${e.message ?: "Unknown service error"}"
+                    generateError = "Step 1 error: ${e.message ?: "Unknown service error"}"
                     isGeneratingQuestions = false
+                    prepGenerationStep = PrepGenerationStep.STEP1_FAILED
+                }
+            }
+        }
+    }
+
+    private fun runGenerationStep2(resumeText: String, step1Qs: List<InterviewQuestion>, onSuccess: () -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val apiKey = if (com.example.BuildConfig.GROQ_API_KEY.isNotEmpty() && com.example.BuildConfig.GROQ_API_KEY != "MY_GROQ_API_KEY") {
+                    com.example.BuildConfig.GROQ_API_KEY
+                } else {
+                    GROQ_API_KEY
+                }
+                if (apiKey.isEmpty() || apiKey == "your_groq_api_key_here") {
+                    viewModelScope.launch(Dispatchers.Main) {
+                        generateError = "Groq API key is not configured. Please add GROQ_API_KEY in the Secrets panel in AI Studio or edit the constant in LeetCodeViewModel.kt."
+                        isGeneratingQuestions = false
+                        prepGenerationStep = PrepGenerationStep.STEP2_FAILED
+                    }
+                    return@launch
+                }
+
+                val systemInstruction = """
+                    You are a senior technical interviewer at a top tech company.
+                    Analyze the resume below and generate exactly 10 interview questions the candidate should prepare for.
+                    Return ONLY a valid JSON array, no markdown, no explanation. Each object:
+                    {
+                      "question": "string",
+                      "suggestedAnswer": "string (3-5 sentences, STAR format)",
+                      "category": "BEHAVIORAL" | "HR",
+                      "sourceProject": "string or null",
+                      "difficulty": "EASY" | "MEDIUM" | "HARD"
+                    }
+                    Make questions specific to their actual work experience and behaviors — not generic.
+                    Include exactly 6 BEHAVIORAL questions and 4 HR questions.
+                """.trimIndent()
+
+                val promptText = "Resume:\n$resumeText"
+
+                val messagesArray = org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "system")
+                        put("content", systemInstruction)
+                    })
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", promptText)
+                    })
+                }
+
+                val requestBodyJson = JSONObject().apply {
+                    put("model", "llama-3.3-70b-versatile")
+                    put("messages", messagesArray)
+                    put("max_tokens", 3000)
+                    put("temperature", 0.7)
+                }
+
+                val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
+                val body = RequestBody.create(mediaType, requestBodyJson.toString())
+                val request = Request.Builder()
+                    .url("https://api.groq.com/openai/v1/chat/completions")
+                    .addHeader("Authorization", "Bearer $apiKey")
+                    .post(body)
+                    .build()
+
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .writeTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val responseBody = response.body?.string() ?: ""
+                        viewModelScope.launch(Dispatchers.Main) {
+                            generateError = "Step 2 (Behavioral & HR) failed: Code ${response.code}: $responseBody"
+                            isGeneratingQuestions = false
+                            prepGenerationStep = PrepGenerationStep.STEP2_FAILED
+                        }
+                        return@launch
+                    }
+                    val responseString = response.body?.string() ?: ""
+                    val jsonResponse = JSONObject(responseString)
+                    val choices = jsonResponse.getJSONArray("choices")
+                    if (choices.length() > 0) {
+                        val choice = choices.getJSONObject(0)
+                        val message = choice.getJSONObject("message")
+                        val rawText = message.getString("content")
+                        val cleanJsonStr = cleanJson(rawText)
+                        val qList = mutableListOf<InterviewQuestion>()
+
+                        try {
+                            val jsonArray = org.json.JSONArray(cleanJsonStr)
+                            for (i in 0 until jsonArray.length()) {
+                                val obj = jsonArray.getJSONObject(i)
+                                val question = obj.optString("question", "")
+                                val suggestedAnswer = obj.optString("suggestedAnswer", "")
+                                val category = obj.optString("category", "BEHAVIORAL").uppercase()
+                                val sourceProject = if (obj.isNull("sourceProject")) null else obj.optString("sourceProject", null)
+                                val difficulty = obj.optString("difficulty", "MEDIUM").uppercase()
+
+                                if (question.isNotEmpty()) {
+                                    qList.add(
+                                        InterviewQuestion(
+                                            question = question,
+                                            suggestedAnswer = suggestedAnswer,
+                                            category = category,
+                                            sourceProject = sourceProject,
+                                            difficulty = difficulty,
+                                            dateGenerated = System.currentTimeMillis()
+                                        )
+                                    )
+                                }
+                            }
+                        } catch (e: Exception) {
+                            viewModelScope.launch(Dispatchers.Main) {
+                                generateError = "Step 2 parsing failed: ${e.message}\nRaw text structures were unexpected."
+                                isGeneratingQuestions = false
+                                prepGenerationStep = PrepGenerationStep.STEP2_FAILED
+                            }
+                            return@launch
+                        }
+
+                        if (qList.isEmpty()) {
+                            viewModelScope.launch(Dispatchers.Main) {
+                                generateError = "Step 2 failed: No valid questions could be extracted."
+                                isGeneratingQuestions = false
+                                prepGenerationStep = PrepGenerationStep.STEP2_FAILED
+                            }
+                            return@launch
+                        }
+
+                        // Both steps succeeded! Merge lists and save.
+                        val mergedQuestions = step1Qs + qList
+
+                        // Save to database
+                        val profile = ResumeProfile(
+                            resumeText = resumeText,
+                            lastUpdated = System.currentTimeMillis()
+                        )
+                        repository.insertResumeProfile(profile)
+                        repository.clearAllQuestions()
+                        repository.insertQuestions(mergedQuestions)
+
+                        viewModelScope.launch(Dispatchers.Main) {
+                            isGeneratingQuestions = false
+                            prepGenerationStep = PrepGenerationStep.SUCCESS
+                            _snackbarMessage.emit("Successfully generated ${mergedQuestions.size} questions!")
+                            onSuccess()
+                        }
+                    } else {
+                        viewModelScope.launch(Dispatchers.Main) {
+                            generateError = "Step 2 failed: No content returned."
+                            isGeneratingQuestions = false
+                            prepGenerationStep = PrepGenerationStep.STEP2_FAILED
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                viewModelScope.launch(Dispatchers.Main) {
+                    generateError = "Step 2 error: ${e.message ?: "Unknown service error"}"
+                    isGeneratingQuestions = false
+                    prepGenerationStep = PrepGenerationStep.STEP2_FAILED
                 }
             }
         }
@@ -686,11 +924,15 @@ class LeetCodeViewModel(private val repository: ProblemRepository) : ViewModel()
         isRegeneratingAnswer = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val apiKey = com.example.BuildConfig.GEMINI_API_KEY
-                if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+                val apiKey = if (com.example.BuildConfig.GROQ_API_KEY.isNotEmpty() && com.example.BuildConfig.GROQ_API_KEY != "MY_GROQ_API_KEY") {
+                    com.example.BuildConfig.GROQ_API_KEY
+                } else {
+                    GROQ_API_KEY
+                }
+                if (apiKey.isEmpty() || apiKey == "your_groq_api_key_here") {
                     viewModelScope.launch(Dispatchers.Main) {
                         isRegeneratingAnswer = false
-                        _snackbarMessage.emit("Gemini API key is not configured in Secrets panel.")
+                        _snackbarMessage.emit("Groq API key is not configured in Secrets panel.")
                     }
                     return@launch
                 }
@@ -704,32 +946,36 @@ class LeetCodeViewModel(private val repository: ProblemRepository) : ViewModel()
                     Candidate background excerpt: $resumeExcerpt
                 """.trimIndent()
 
-                val contentsArray = org.json.JSONArray().put(
-                    JSONObject().put("parts", org.json.JSONArray().put(
-                        JSONObject().put("text", promptText)
-                    ))
-                )
-
-                val systemInstructionObj = JSONObject().put("parts", org.json.JSONArray().put(
-                    JSONObject().put("text", systemInstruction)
-                ))
+                val messagesArray = org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "system")
+                        put("content", systemInstruction)
+                    })
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", promptText)
+                    })
+                }
 
                 val requestBodyJson = JSONObject().apply {
-                    put("contents", contentsArray)
-                    put("systemInstruction", systemInstructionObj)
+                    put("model", "llama-3.3-70b-versatile")
+                    put("messages", messagesArray)
+                    put("max_tokens", 1500)
+                    put("temperature", 0.7)
                 }
 
                 val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
                 val body = RequestBody.create(mediaType, requestBodyJson.toString())
                 val request = Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+                    .url("https://api.groq.com/openai/v1/chat/completions")
+                    .addHeader("Authorization", "Bearer $apiKey")
                     .post(body)
                     .build()
 
                 val client = OkHttpClient.Builder()
-                    .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                    .connectTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    .writeTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
 
                 client.newCall(request).execute().use { response ->
@@ -742,26 +988,23 @@ class LeetCodeViewModel(private val repository: ProblemRepository) : ViewModel()
                     }
                     val responseString = response.body?.string() ?: ""
                     val jsonResponse = JSONObject(responseString)
-                    val candidates = jsonResponse.getJSONArray("candidates")
-                    if (candidates.length() > 0) {
-                        val candidate = candidates.getJSONObject(0)
-                        val content = candidate.getJSONObject("content")
-                        val parts = content.getJSONArray("parts")
-                        if (parts.length() > 0) {
-                            val newAnswer = parts.getJSONObject(0).getString("text").trim()
-                            
-                            val currentList = allQuestions.value
-                            val questionToUpdate = currentList.find { it.id == questionId }
-                            if (questionToUpdate != null) {
-                                val updated = questionToUpdate.copy(suggestedAnswer = newAnswer)
-                                repository.updateQuestion(updated)
-                            }
+                    val choices = jsonResponse.getJSONArray("choices")
+                    if (choices.length() > 0) {
+                        val choice = choices.getJSONObject(0)
+                        val message = choice.getJSONObject("message")
+                        val newAnswer = message.getString("content").trim()
+                        
+                        val currentList = allQuestions.value
+                        val questionToUpdate = currentList.find { it.id == questionId }
+                        if (questionToUpdate != null) {
+                            val updated = questionToUpdate.copy(suggestedAnswer = newAnswer)
+                            repository.updateQuestion(updated)
+                        }
 
-                            viewModelScope.launch(Dispatchers.Main) {
-                                isRegeneratingAnswer = false
-                                _snackbarMessage.emit("Suggested answer regenerated!")
-                                completion()
-                            }
+                        viewModelScope.launch(Dispatchers.Main) {
+                            isRegeneratingAnswer = false
+                            _snackbarMessage.emit("Suggested answer regenerated!")
+                            completion()
                         }
                     }
                 }
