@@ -166,6 +166,15 @@ fun AIHintScreen(
                     Text("Get Approach Hint ✦", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = Color.White)
                 }
 
+                // Status message below the button
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "This may take 10-20 seconds on first load",
+                    fontSize = 11.sp,
+                    color = TextSecondary,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
+
                 // 4. Output Area (Success, Loading, Error, Idle)
                 when (val state = viewModel.aiState) {
                     is AIHintState.Idle -> {
@@ -180,7 +189,23 @@ fun AIHintScreen(
                     }
 
                     is AIHintState.Loading -> {
-                        ShimmerLoadingCard()
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            ShimmerLoadingCard()
+                            val loadingText = viewModel.aiLoadingText
+                            if (loadingText.isNotEmpty()) {
+                                Text(
+                                    text = loadingText,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AccentAmber,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
                     }
 
                     is AIHintState.Error -> {
