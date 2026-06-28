@@ -429,7 +429,11 @@ fun ResumeSubScreen(
                         )
                         Spacer(modifier = Modifier.width(16.dp))
                         Text(
-                            text = "Analyzing your resume... ✦",
+                            text = when (viewModel.prepGenerationStep) {
+                                LeetCodeViewModel.PrepGenerationStep.STEP1_RUNNING -> "Generating project & technical questions... (1/2)"
+                                LeetCodeViewModel.PrepGenerationStep.STEP2_RUNNING -> "Generating behavioral & HR questions... (2/2)"
+                                else -> "Analyzing your resume... ✦"
+                            },
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                             color = TextPrimary
@@ -437,28 +441,80 @@ fun ResumeSubScreen(
                     }
                 }
             } else {
-                Button(
-                    onClick = {
-                        viewModel.generateQuestionsFromResume {
-                            onNavigateToQuestions()
-                        }
-                        isEditingText = false
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
-                    enabled = viewModel.resumeInputText.isNotBlank()
-                ) {
-                    Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Generate Interview Questions",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = Color.White
-                    )
+                val isFailed = viewModel.prepGenerationStep == LeetCodeViewModel.PrepGenerationStep.STEP1_FAILED ||
+                               viewModel.prepGenerationStep == LeetCodeViewModel.PrepGenerationStep.STEP2_FAILED
+                if (isFailed) {
+                    Button(
+                        onClick = {
+                            viewModel.retryFailedGenerationStep {
+                                onNavigateToQuestions()
+                            }
+                            isEditingText = false
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
+                        enabled = viewModel.resumeInputText.isNotBlank()
+                    ) {
+                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (viewModel.prepGenerationStep == LeetCodeViewModel.PrepGenerationStep.STEP1_FAILED) "Retry Step 1 (Project & Technical)" else "Retry Step 2 (Behavioral & HR)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color.White
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.generateQuestionsFromResume {
+                                onNavigateToQuestions()
+                            }
+                            isEditingText = false
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryPurple),
+                        border = BorderStroke(1.dp, PrimaryPurple),
+                        enabled = viewModel.resumeInputText.isNotBlank()
+                    ) {
+                        Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Start Over Completely",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            viewModel.generateQuestionsFromResume {
+                                onNavigateToQuestions()
+                            }
+                            isEditingText = false
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
+                        enabled = viewModel.resumeInputText.isNotBlank()
+                    ) {
+                        Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Generate Interview Questions",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color.White
+                        )
+                    }
                 }
             }
 
